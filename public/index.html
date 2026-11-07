@@ -193,7 +193,7 @@ function roleCard() {
   const imp = S.myRole === 'imposter';
   if (!peek) return `<button class="role" data-act="peek"><h3>Tap to reveal your role</h3><span class="mute small">Make sure nobody is looking at your screen.</span></button>`;
   return `<button class="role open pop ${imp ? 'imp' : 'civ'}" data-act="peek">
-    ${imp ? `<h3 style="color:var(--coral)">You are the IMPOSTER</h3><div class="word">???</div><span class="small">Category: ${esc(S.category)}. Blend in — figure out the word from the clues.</span>`
+    ${imp ? `<h3 style="color:var(--coral)">You are the IMPOSTER</h3><div class="word">${esc(S.myHint)}</div><span class="small">That's your hint word, not the real one. Blend in and work out the secret word from the clues. Tap to hide.</span>`
           : `<h3 style="color:var(--mint)">You are a civilian</h3><div class="word">${esc(S.myWord)}</div><span class="small">Hint at the word without making it obvious. Tap to hide.</span>`}
   </button>`;
 }
@@ -252,8 +252,7 @@ function game() {
     title = 'Last chance';
     const g = P(S.guessId), mine = S.guessId === S.you;
     main = `<div class="card col"><h3>${mine ? 'You were caught! Guess the secret word to steal the win.' : `${esc(g.name)} was the imposter and is guessing the word…`}</h3>
-      ${mine ? `<div class="row"><input type="text" id="guess" class="grow" maxlength="30" placeholder="Secret word" data-enter="guess" autocomplete="off"><button class="btn bad" data-act="guess">Guess</button></div>` : '<span class="mute">If they get it right, the imposters win.</span>'}
-      <div class="small mute">Category: ${esc(S.category)}</div></div>`;
+      ${mine ? `<div class="row"><input type="text" id="guess" class="grow" maxlength="30" placeholder="Secret word" data-enter="guess" autocomplete="off"><button class="btn bad" data-act="guess">Guess</button></div>` : '<span class="mute">If they get it right, the imposters win.</span>'}</div>`;
   }
   if (S.phase === 'results') {
     title = 'Game over';
@@ -278,10 +277,12 @@ function lobby() {
     <div class="card col"><h3>Players (${n})</h3>${playersStrip()}</div>
   </div>
   <div class="card col"><h3>Game settings</h3>
-    <div class="col"><span class="mute small">Word pack</span>${seg(['Food', 'Animals', 'Places', 'Objects', 'Jobs'].map((x) => [x, x]), c.preset, 'preset')}</div>
-    ${h ? `<div class="col"><span class="mute small">Or type your own secret word (overrides the pack, host can't be imposter)</span>
-      <input type="text" id="cw" maxlength="30" placeholder="Custom word (optional)" value="${esc(c.customWord)}" autocomplete="off"></div>`
-        : (c.hasCustom ? '<span class="mute small">The host picked a custom word.</span>' : '')}
+    ${h ? `<div class="col"><span class="mute small">Secret word (civilians see this)</span>
+      <input type="text" id="sw" maxlength="30" placeholder="e.g. Pizza" value="${esc(c.secretWord)}" autocomplete="off">
+      <span class="mute small">Hint word (the imposter sees this instead)</span>
+      <input type="text" id="hw" maxlength="30" placeholder="e.g. Italian food" value="${esc(c.hintWord)}" autocomplete="off">
+      <span class="mute small">You know the secret word, so you'll never be the imposter.</span></div>`
+        : '<span class="mute small">The host will choose the secret word and the imposter\'s hint.</span>'}
     <div class="col"><span class="mute small">Imposters</span>${seg([[1, '1'], [2, '2 (5+ players)']], c.imposters, 'imps')}</div>
     <div class="col"><span class="mute small">Clue timer per turn</span>${seg([[15, '15s'], [30, '30s'], [45, '45s'], [60, '60s']], c.clueTime, 'ct')}</div>
     ${h ? `<button class="btn" data-act="start">Start game</button><span class="mute small">Needs ${c.imposters === 2 ? 5 : 3}+ players.</span>` : '<span class="mute">Waiting for the host to start…</span>'}
@@ -312,7 +313,6 @@ const actions = {
   skipDisc: () => socket.emit('skipDiscussion'),
   vote: (d) => socket.emit('vote', d.id),
   again: () => socket.emit('playAgain'),
-  preset: (d) => socket.emit('config', { preset: d.v }),
   imps: (d) => socket.emit('config', { imposters: +d.v }),
   ct: (d) => socket.emit('config', { clueTime: +d.v }),
   start: () => socket.emit('start', null, (r) => r && !r.ok && flash(r.error)),
@@ -326,7 +326,8 @@ app.addEventListener('keydown', (e) => {
   if (e.key === 'Enter' && e.target.dataset.enter) actions[e.target.dataset.enter]();
 });
 app.addEventListener('input', (e) => {
-  if (e.target.id === 'cw') socket.emit('config', { customWord: e.target.value });
+  if (e.target.id === 'sw') socket.emit('config', { secretWord: e.target.value });
+  if (e.target.id === 'hw') socket.emit('config', { hintWord: e.target.value });
   if (e.target.id === 'code') e.target.value = e.target.value.toUpperCase();
 });
 
