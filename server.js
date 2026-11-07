@@ -20,15 +20,6 @@ const PORT = process.env.PORT || 3000;
 app.use(express.static(path.join(__dirname, 'public')));
 app.get('/healthz', (_req, res) => res.send('ok')); // handy for hosting health checks
 
-/* ------------------------------ Word presets ------------------------------ */
-const PRESETS = {
-  Food: ['Pizza', 'Sushi', 'Burger', 'Pancake', 'Noodles', 'Curry', 'Taco', 'Salad', 'Chocolate', 'Popcorn', 'Cheese', 'Dumpling', 'Ice cream', 'Sandwich', 'Omelette'],
-  Animals: ['Elephant', 'Penguin', 'Giraffe', 'Dolphin', 'Kangaroo', 'Octopus', 'Panda', 'Owl', 'Crocodile', 'Hedgehog', 'Flamingo', 'Tiger', 'Squirrel', 'Bat', 'Camel'],
-  Places: ['Airport', 'Library', 'Beach', 'Hospital', 'Zoo', 'Cinema', 'Supermarket', 'Castle', 'Desert', 'Stadium', 'Museum', 'Volcano', 'Farm', 'Bridge', 'Lighthouse'],
-  Objects: ['Umbrella', 'Toothbrush', 'Backpack', 'Mirror', 'Candle', 'Scissors', 'Headphones', 'Clock', 'Ladder', 'Compass', 'Blanket', 'Teapot', 'Skateboard', 'Wallet', 'Camera'],
-  Jobs: ['Pilot', 'Chef', 'Firefighter', 'Teacher', 'Dentist', 'Farmer', 'Detective', 'Astronaut', 'Plumber', 'Magician', 'Barber', 'Lifeguard', 'Mechanic', 'Singer', 'Judge']
-};
-
 const LIMITS = { maxPlayers: 12, minPlayers: 3, discussionMs: 90_000, votingMs: 45_000, revealMs: 7_000, guessMs: 40_000, maxRounds: 3 };
 const rooms = new Map(); // code -> room
 
@@ -48,8 +39,8 @@ function genCode() {
 function newRoom(code) {
   return {
     code, players: [], phase: 'lobby',
-    config: { preset: 'Food', customWord: '', imposters: 1, clueTime: 30 },
-    word: '', category: '', round: 0, order: [], turnIdx: 0,
+    config: { secretWord: '', hintWord: '', imposters: 1, clueTime: 30 },
+    word: '', hint: '', round: 0, order: [], turnIdx: 0,
     timeout: null, timerEnd: 0, log: [], chat: [], votes: {}, reveal: null, guessId: null, result: null, cleanup: null
   };
 }
@@ -71,11 +62,13 @@ function buildView(room, me) {
   const showRoles = room.phase === 'results';
   return {
     code: room.code, phase: room.phase, round: room.round,
-    // The custom word is only echoed back to the host who typed it
-    config: { ...room.config, customWord: me.isHost ? room.config.customWord : '', hasCustom: !!room.config.customWord },
-    you: me.id, category: room.category,
+    // The secret + hint words are only echoed back to the host who typed them
+    config: { imposters: room.config.imposters, clueTime: room.config.clueTime,
+      secretWord: me.isHost ? room.config.secretWord : '', hintWord: me.isHost ? room.config.hintWord : '' },
+    you: me.id,
     myRole: room.phase === 'lobby' ? null : me.role,
     myWord: me.role === 'civilian' ? room.word : null,
+    myHint: me.role === 'imposter' ? room.hint : null, // the imposter's only clue
     players: room.players.map((p) => ({
       id: p.id, name: p.name, isHost: p.isHost, connected: p.connected, alive: p.alive,
       // Roles are only public for eliminated players and at game end.
@@ -97,15 +90,14 @@ function broadcast(room) {
 /* ------------------------------- Game flow -------------------------------- */
 function startGame(room) {
   const { config } = room;
-  const custom = clean(config.customWord, 30);
-  room.category = custom ? 'Custom' : config.preset;
-  const list = PRESETS[config.preset] || PRESETS.Food;
-  room.word = custom || list[rint(list.length)];
+  // Both words come straight from the host (no word packs)
+  room.word = clean(config.secretWord, 30);
+  room.hint = clean(config.hintWord, 30);
 
   // Secure shuffle -> first N players become imposters
   let shuffled = shuffle(room.players);
-  // With a custom word the host already knows it, so the host is never the imposter (fairness)
-  if (custom) shuffled = [...shuffled.filter((p) => !p.isHost), ...shuffled.filter((p) => p.isHost)];
+  // The host typed the secret word, so the host is never the imposter (fairness)
+  shuffled = [...shuffled.filter((p) => !p.isHost), ...shuffled.filter((p) => p.isHost)];
   shuffled.forEach((p, i) => { p.role = i < config.imposters ? 'imposter' : 'civilian'; p.alive = true; });
   room.round = 0; room.log = []; room.chat = []; room.result = null; room.reveal = null;
   room.baseOrder = shuffle(room.players).map((p) => p.id); // strict turn order for the whole game
@@ -265,8 +257,8 @@ io.on('connection', (socket) => {
   socket.on('config', (patch = {}) => {
     if (!isHost() || room.phase !== 'lobby') return;
     const c = room.config;
-    if (patch.preset in PRESETS) c.preset = patch.preset;
-    if (typeof patch.customWord === 'string') c.customWord = clean(patch.customWord, 30);
+    if (typeof patch.secretWord === 'string') c.secretWord = clean(patch.secretWord, 30);
+    if (typeof patch.hintWord === 'string') c.hintWord = clean(patch.hintWord, 30);
     if ([1, 2].includes(patch.imposters)) c.imposters = patch.imposters;
     if ([15, 30, 45, 60].includes(patch.clueTime)) c.clueTime = patch.clueTime;
     broadcast(room);
@@ -276,6 +268,9 @@ io.on('connection', (socket) => {
     if (!isHost() || room.phase !== 'lobby') return;
     const n = room.players.filter((p) => p.connected).length;
     room.players = room.players.filter((p) => p.connected);
+    const sw = clean(room.config.secretWord, 30), hw = clean(room.config.hintWord, 30);
+    if (!sw || !hw) return fail(cb, 'Enter both the secret word and the imposter hint word.');
+    if (norm(sw) === norm(hw)) return fail(cb, 'The hint word must be different from the secret word.');
     const need = room.config.imposters === 2 ? 5 : LIMITS.minPlayers;
     if (n < need) return fail(cb, `Need at least ${need} players for ${room.config.imposters} imposter${room.config.imposters > 1 ? 's' : ''}.`);
     startGame(room);
